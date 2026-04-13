@@ -41,6 +41,7 @@ export interface GameInstallation {
   maxPlayers?: number;
   gameType?: string;
   audienceSupported?: boolean;
+  launchTarget?: string;
   directLaunchSupported: boolean;
   launchLabel: "Launch Game" | "Launch Pack Menu";
 }

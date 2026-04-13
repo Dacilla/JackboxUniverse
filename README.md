@@ -13,8 +13,10 @@ Implemented now:
 - Windows Electron desktop app with a React renderer.
 - Local scan for installed Jackbox pack folders.
 - Manual folder picker for standalone or missed installations.
+- Manual scan support for folders containing local `.lnk` or file `.url` shortcuts to Jackbox pack executables.
 - Cache validation on launch, removing missing pack paths from local storage.
 - Local metadata extraction from `jbg.config`, `manifest.json`, and XML files.
+- Picker metadata extraction from local `games/Picker` or `games/PartyPack` content and localisation files.
 - Manual metadata overrides for display name, description, player counts, game type, and audience support.
 - Duplicate detection for matching games found in multiple install locations.
 - Duplicate-resolution UI for choosing the preferred installation.
@@ -43,7 +45,11 @@ Jackbox Universe does not read Steam, Epic, or other storefront databases. It se
 - an executable file with `Jackbox` in the filename
 - an adjacent `games` directory
 
-For each game folder inside `games`, the app tries to parse local metadata files and builds a library entry. If a game folder contains `<InternalName>.swf`, the launcher attempts direct launch using:
+Manual scan folders can also contain shortcuts. Windows `.lnk` shortcuts are resolved to their local target/working directory, and local file `.url` shortcuts are resolved when they point directly to an installed executable. Storefront launch URLs still rely on the normal filesystem scan finding the installed pack folder.
+
+For each game folder inside `games`, the app first checks the pack picker metadata in `games/Picker/content.json` or `games/PartyPack/content.json`, resolving localised game names and descriptions through adjacent `Localization.json` files where available. This is the best local source for display names, player counts, picker tags, audience support, and the exact SWF target used by the pack itself. If picker metadata is missing, the app falls back to per-game config files.
+
+If a direct SWF target can be confirmed, the launcher attempts direct launch using:
 
 ```text
 -launchTo games%2F<InternalName>%2F<InternalName>.swf -jbg.config isBundle=false
@@ -192,7 +198,7 @@ Planned next work:
 - Direct mini-game launch is best-effort in the MVP.
 - Some Jackbox packs may require loader-style behaviour that this project intentionally does not implement yet.
 - The scanner only recognises pack folders with a `Jackbox` executable and adjacent `games` folder.
-- Metadata quality depends on the installed local files; older packs may need manual overrides.
+- Metadata quality depends on the installed local files; older packs without readable picker metadata may need manual overrides.
 - The current package is unsigned, so Windows may show SmartScreen or trust prompts.
 - Game process kill uses Windows `taskkill` against the tracked PID tree.
 

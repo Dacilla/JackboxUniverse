@@ -18,7 +18,7 @@ const parser = new XMLParser({
   textNodeName: "value"
 });
 
-const configFileNames = new Set(["jbg.config", "manifest.json"]);
+const configFileNames = new Set(["jbg.config", "jbg.config.jet", "manifest.json"]);
 
 export async function extractGameMetadata(gameFolder: string): Promise<ExtractedMetadata> {
   const internalName = path.basename(gameFolder);
@@ -30,7 +30,7 @@ export async function extractGameMetadata(gameFolder: string): Promise<Extracted
   }
 
   return {
-    displayName: readString(values, ["DisplayName", "displayName", "name", "Name", "Title", "title"]) ?? internalName,
+    displayName: readString(values, ["DisplayName", "displayName", "gameName", "name", "Name", "Title", "title"]) ?? internalName,
     description: readString(values, ["Description", "description", "desc", "small_description"]) ?? "",
     minPlayers: readNumber(values, ["MinPlayers", "minPlayers", "min_players", "min"]),
     maxPlayers: readNumber(values, ["MaxPlayers", "maxPlayers", "max_players", "max"]),
@@ -64,7 +64,7 @@ async function findMetadataFiles(root: string, maxDepth: number): Promise<string
 
     for (const entry of entries) {
       const entryPath = path.join(folder, entry.name);
-      if (entry.isFile() && isMetadataFile(entry.name)) {
+      if (entry.isFile() && isMetadataFile(entry.name, folder)) {
         found.push(entryPath);
       }
     }
@@ -82,8 +82,9 @@ async function findMetadataFiles(root: string, maxDepth: number): Promise<string
   return found;
 }
 
-function isMetadataFile(fileName: string): boolean {
+function isMetadataFile(fileName: string, folder: string): boolean {
   const lower = fileName.toLowerCase();
+  if (lower === "manifest.json" && path.basename(folder).toLowerCase() === "content") return false;
   return configFileNames.has(lower) || lower.endsWith(".xml");
 }
 

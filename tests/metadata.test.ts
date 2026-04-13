@@ -39,6 +39,18 @@ describe("metadata extraction", () => {
     });
   });
 
+  it("parses JSON jbg.config.jet metadata without treating nested content manifests as game titles", async () => {
+    const root = path.join(process.cwd(), "tmp-test-fixtures", `jet-config-${Date.now()}`);
+    fixtureRoots.push(root);
+    await mkdir(path.join(root, "content"), { recursive: true });
+    await writeFile(path.join(root, "jbg.config.jet"), JSON.stringify({ gameName: "TimeTrivia", gameTag: "time-trivia" }));
+    await writeFile(path.join(root, "content", "manifest.json"), JSON.stringify({ title: "Main Content Pack" }));
+
+    const metadata = await extractGameMetadata(root);
+
+    expect(metadata.displayName).toBe("TimeTrivia");
+  });
+
   it("applies manual overrides after extracted metadata", () => {
     const metadata = applyMetadataOverride(
       {
