@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { inflateRawSync } from "node:zlib";
 import type { ExtractedMetadata } from "./metadata.js";
 
 export interface PickerGameMetadata extends ExtractedMetadata {
@@ -25,6 +26,18 @@ interface PickerEntry {
 interface PickerSource {
   pickerPath: string;
   entries: PickerEntry[];
+  archive?: AssetArchive;
+}
+
+interface AssetArchiveEntry {
+  compressedSize: number;
+  dataStart: number;
+  method: number;
+}
+
+interface AssetArchive {
+  buffer: Buffer;
+  entries: Map<string, AssetArchiveEntry>;
 }
 
 const pickerFolderNames = ["Picker", "PartyPack"];
@@ -47,7 +60,7 @@ export async function readPickerMetadata(packPath: string): Promise<Map<string, 
   const source = await readPickerSource(packPath);
   if (!source) return new Map();
 
-  const localisation = await readLocalisation(source.pickerPath);
+  const localisation = await readLocalisation(source);
   const metadata = new Map<string, PickerGameMetadata>();
 
   await Promise.all(
@@ -58,7 +71,7 @@ export async function readPickerMetadata(packPath: string): Promise<Map<string, 
 
       const iconTags = readIconTags(entry.icons);
       const playerRange = readPlayerRange(readString(entry.players)) ?? readPlayerRangeFromIcons(entry.icons);
-      const description = await readDescription(packPath, source.pickerPath, entry, localisation);
+      const description = await readDescription(packPath, source, entry, localisation);
 
       metadata.set(internalName.toLowerCase(), {
         internalName,
@@ -87,23 +100,50 @@ async function readPickerSource(packPath: string): Promise<PickerSource | undefi
     const entries = Array.isArray(content?.games) ? content.games : Array.isArray(content?.content) ? content.content : undefined;
     if (entries) return { pickerPath, entries: entries as PickerEntry[] };
   }
+
+  const archive = await readAssetArchive(path.join(packPath, "assets.bin"));
+  if (!archive) return undefined;
+
+  for (const folderName of pickerFolderNames) {
+    const content = readArchivedJson(archive, `games/${folderName}/content.json`);
+    const entries = Array.isArray(content?.games) ? content.games : Array.isArray(content?.content) ? content.content : undefined;
+    if (entries) {
+      return {
+        pickerPath: path.join(packPath, "games", folderName),
+        entries: entries as PickerEntry[],
+        archive
+      };
+    }
+  }
+
   return undefined;
 }
 
 async function readDescription(
   packPath: string,
-  pickerPath: string,
+  source: PickerSource,
   entry: PickerEntry,
   localisation: Record<string, string>
 ): Promise<string> {
+  const description = readString(entry.description);
+  const tagline = readString(entry.tagline);
   const localised =
-    localise(readString(entry.description), localisation) ??
-    localise(readString(entry.tagline), localisation);
+    localise(description, localisation) ??
+    localise(tagline, localisation);
   if (localised) return localised;
+
+  const inlineDescription = readInlineDescription(description) ?? readInlineDescription(tagline);
+  if (inlineDescription) return inlineDescription;
 
   const descriptionFile = readString(entry.descriptionFile);
   if (!descriptionFile) return "";
 
+  if (source.archive) {
+    const archivePath = toPickerArchivePath(packPath, source.pickerPath, descriptionFile);
+    return archivePath ? stripHtml(readArchivedText(source.archive, archivePath) ?? "") : "";
+  }
+
+  const pickerPath = source.pickerPath;
   const resolved = path.resolve(pickerPath, descriptionFile);
   if (!isWithinFolder(pickerPath, resolved) && !isWithinFolder(packPath, resolved)) return "";
 
@@ -123,8 +163,13 @@ async function readAudienceSupported(packPath: string, internalName: string, ent
   return containsSource(settings, "AudienceOn") ? true : undefined;
 }
 
-async function readLocalisation(pickerPath: string): Promise<Record<string, string>> {
-  const localisation = await readJson(path.join(pickerPath, "Localization.json"));
+async function readLocalisation(source: PickerSource): Promise<Record<string, string>> {
+  const packPath = path.dirname(path.dirname(source.pickerPath));
+  const archivePath = toPickerArchivePath(packPath, source.pickerPath, "Localization.json");
+  const localisation =
+    source.archive
+      ? readArchivedJson(source.archive, archivePath)
+      : await readJson(path.join(source.pickerPath, "Localization.json"));
   const tableContainer = localisation?.table;
   const table = tableContainer && typeof tableContainer === "object" ? (tableContainer as Record<string, unknown>).en : undefined;
   if (!table || typeof table !== "object") return {};
@@ -138,6 +183,63 @@ async function readJson(filePath: string): Promise<Record<string, unknown> | und
   } catch {
     return undefined;
   }
+}
+
+async function readAssetArchive(filePath: string): Promise<AssetArchive | undefined> {
+  let buffer: Buffer;
+  try {
+    buffer = await fs.readFile(filePath);
+  } catch {
+    return undefined;
+  }
+
+  const entries = new Map<string, AssetArchiveEntry>();
+  let offset = 0;
+  while (offset + 30 <= buffer.length) {
+    const signature = buffer.readUInt32LE(offset);
+    const isFirstJackboxSignature = offset === 0 && buffer.subarray(0, 4).toString("ascii") === "JBGP";
+    if (signature !== 0x04034b50 && !isFirstJackboxSignature) break;
+
+    const method = buffer.readUInt16LE(offset + 8);
+    const compressedSize = buffer.readUInt32LE(offset + 18);
+    const fileNameLength = buffer.readUInt16LE(offset + 26);
+    const extraLength = buffer.readUInt16LE(offset + 28);
+    const fileNameStart = offset + 30;
+    const dataStart = fileNameStart + fileNameLength + extraLength;
+    const nextOffset = dataStart + compressedSize;
+    if (dataStart > buffer.length || nextOffset > buffer.length) break;
+
+    const fileName = buffer.subarray(fileNameStart, fileNameStart + fileNameLength).toString("utf8");
+    entries.set(normaliseArchivePath(fileName).toLowerCase(), { compressedSize, dataStart, method });
+    offset = nextOffset;
+  }
+
+  return entries.size ? { buffer, entries } : undefined;
+}
+
+function readArchivedJson(archive: AssetArchive, archivePath?: string): Record<string, unknown> | undefined {
+  const raw = readArchivedText(archive, archivePath);
+  if (!raw) return undefined;
+  try {
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+}
+
+function readArchivedText(archive: AssetArchive, archivePath?: string): string | undefined {
+  if (!archivePath) return undefined;
+  const entry = archive.entries.get(normaliseArchivePath(archivePath).toLowerCase());
+  if (!entry) return undefined;
+
+  const compressed = archive.buffer.subarray(entry.dataStart, entry.dataStart + entry.compressedSize);
+  try {
+    if (entry.method === 0) return compressed.toString("utf8");
+    if (entry.method === 8) return inflateRawSync(compressed).toString("utf8");
+  } catch {
+    return undefined;
+  }
+  return undefined;
 }
 
 function readPlayerRangeFromIcons(icons: unknown): { minPlayers: number; maxPlayers: number } | undefined {
@@ -184,6 +286,15 @@ function localise(key: string | undefined, localisation: Record<string, string>)
   return localisation[key]?.trim() || undefined;
 }
 
+function readInlineDescription(value: string | undefined): string | undefined {
+  if (!value || isLikelyLocalisationKey(value)) return undefined;
+  return stripHtml(value);
+}
+
+function isLikelyLocalisationKey(value: string): boolean {
+  return /^[A-Z0-9_.-]+$/.test(value) && value.includes("_");
+}
+
 function readString(value: unknown): string | undefined {
   if (typeof value === "string" && value.trim()) return value.trim();
   if (typeof value === "number") return String(value);
@@ -201,6 +312,15 @@ function readBoolean(value: unknown): boolean | undefined {
 
 function toLaunchTarget(internalName: string, mainSwf: string): string {
   return ["games", internalName, mainSwf.replaceAll("\\", "/")].join("/");
+}
+
+function toPickerArchivePath(packPath: string, pickerPath: string, relativePath: string): string | undefined {
+  if (path.isAbsolute(relativePath)) return undefined;
+
+  const resolved = path.resolve(pickerPath, relativePath);
+  if (!isWithinFolder(pickerPath, resolved) && !isWithinFolder(packPath, resolved)) return undefined;
+
+  return normaliseArchivePath(path.relative(packPath, resolved));
 }
 
 function stripHtml(raw: string): string {
@@ -227,4 +347,8 @@ function toTitleCase(value: string): string {
 function isWithinFolder(folder: string, target: string): boolean {
   const relative = path.relative(folder, target);
   return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+function normaliseArchivePath(value: string): string {
+  return value.replaceAll("\\", "/").replace(/^\/+/, "");
 }

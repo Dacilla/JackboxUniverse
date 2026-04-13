@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { deflateRawSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildLibrary, discoverPackRoots, getLaunchArguments, validatePackPaths } from "../src/main/scanner";
 
@@ -136,6 +137,37 @@ describe("scanner", () => {
     ]);
   });
 
+  it("reads picker metadata from bundled Pack 2 assets", async () => {
+    const root = path.join(process.cwd(), "tmp-test-fixtures", `bundled-picker-metadata-${Date.now()}`);
+    fixtureRoots.push(root);
+    const packPath = await createPack(root, "The Jackbox Party Pack 2", "Auction");
+    await writePackAssets(packPath, {
+      "games/PartyPack/content.json": JSON.stringify({
+        games: [
+          {
+            name: "Auction",
+            mainSwf: "Auction.swf",
+            title: "Bidiots",
+            players: "3-6 PLAYERS",
+            family: false,
+            audience: false,
+            description: "Outbid your opponents for absurd art."
+          }
+        ]
+      })
+    });
+
+    const library = await buildLibrary([packPath], {}, {}, undefined);
+    const game = library.games[0].selected;
+
+    expect(game.displayName).toBe("Bidiots");
+    expect(game.description).toBe("Outbid your opponents for absurd art.");
+    expect(game.minPlayers).toBe(3);
+    expect(game.maxPlayers).toBe(6);
+    expect(game.audienceSupported).toBe(false);
+    expect(game.launchTarget).toBe("games/Auction/Auction.swf");
+  });
+
   it("uses modern PartyPack picker icon metadata for players and game type", async () => {
     const root = path.join(process.cwd(), "tmp-test-fixtures", `party-pack-metadata-${Date.now()}`);
     fixtureRoots.push(root);
@@ -231,6 +263,36 @@ function createWindowsShortcut(shortcutPath: string, targetPath: string, working
       }
     );
   });
+}
+
+async function writePackAssets(packPath: string, files: Record<string, string>): Promise<void> {
+  const entries = Object.entries(files).map(([fileName, content], index) => createPackAssetEntry(fileName, content, index === 0));
+  await writeFile(path.join(packPath, "assets.bin"), Buffer.concat(entries));
+}
+
+function createPackAssetEntry(fileName: string, content: string, useJackboxSignature: boolean): Buffer {
+  const fileNameBuffer = Buffer.from(fileName, "utf8");
+  const contentBuffer = Buffer.from(content, "utf8");
+  const compressed = deflateRawSync(contentBuffer);
+  const header = Buffer.alloc(30);
+
+  if (useJackboxSignature) {
+    header.write("JBGP", 0, "ascii");
+  } else {
+    header.writeUInt32LE(0x04034b50, 0);
+  }
+
+  header.writeUInt16LE(10, 4);
+  header.writeUInt16LE(0, 6);
+  header.writeUInt16LE(8, 8);
+  header.writeUInt32LE(0, 10);
+  header.writeUInt32LE(0, 14);
+  header.writeUInt32LE(compressed.length, 18);
+  header.writeUInt32LE(contentBuffer.length, 22);
+  header.writeUInt16LE(fileNameBuffer.length, 26);
+  header.writeUInt16LE(0, 28);
+
+  return Buffer.concat([header, fileNameBuffer, compressed]);
 }
 
 function getPowerShellPath(): string {
