@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactElement } from "react";
 import type { DuplicateGroup, HydrationProgress, LibraryGame, LibraryState, MetadataOverride, Settings } from "../shared/types";
 
 const emptyLibrary: LibraryState = { packs: [], games: [], duplicates: [] };
 
 type SortMode = "pack" | "alpha";
+type ViewMode = "grid" | "gallery" | "showcase";
 
 interface Filters {
   search: string;
@@ -32,6 +33,9 @@ export function App(): ReactElement {
   const [editingGame, setEditingGame] = useState<LibraryGame | undefined>();
   const [showSettings, setShowSettings] = useState(false);
   const [duplicateGroup, setDuplicateGroup] = useState<DuplicateGroup | undefined>();
+  const [viewMode, setViewMode] = useState<ViewMode>("grid");
+  const [showcaseCols, setShowcaseCols] = useState(1);
+  const libraryRef = useRef<HTMLElement>(null);
 
   const loadLibrary = useCallback(async () => {
     setLoading(true);
@@ -71,6 +75,21 @@ export function App(): ReactElement {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+
+  useEffect(() => {
+    if (viewMode !== "showcase") return;
+    const el = libraryRef.current;
+    if (!el) return;
+    function recalc(): void {
+      const rect = el!.getBoundingClientRect();
+      const layout = calculateShowcaseLayout(library.games.length, rect.width, rect.height, 8);
+      setShowcaseCols(layout.cols);
+    }
+    recalc();
+    const observer = new ResizeObserver(recalc);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [viewMode, library.games.length]);
 
   const gameTypes = useMemo(() => {
     const types = new Set<string>();
@@ -200,7 +219,7 @@ export function App(): ReactElement {
   }
 
   return (
-    <main className={`app-shell${settings.preferReducedMotion ? " reduce-motion" : ""}`}>
+    <main className={`app-shell view-${viewMode}${settings.preferReducedMotion ? " reduce-motion" : ""}`}>
       <header className="topbar">
         <div>
           <p className="eyebrow">Windows launcher</p>
@@ -211,6 +230,11 @@ export function App(): ReactElement {
           <button type="button" onClick={addManualFolder} disabled={loading}>Add Folder</button>
           <button type="button" onClick={killActiveGame}>Close Active Game</button>
           <button type="button" onClick={() => setShowSettings(true)}>Settings</button>
+          <div className="view-modes" role="radiogroup" aria-label="Library view mode">
+            <button type="button" role="radio" aria-checked={viewMode === "grid"} className={viewMode === "grid" ? "active" : ""} onClick={() => setViewMode("grid")}>Grid</button>
+            <button type="button" role="radio" aria-checked={viewMode === "gallery"} className={viewMode === "gallery" ? "active" : ""} onClick={() => setViewMode("gallery")}>Gallery</button>
+            <button type="button" role="radio" aria-checked={viewMode === "showcase"} className={viewMode === "showcase" ? "active" : ""} onClick={() => setViewMode("showcase")}>Showcase</button>
+          </div>
         </div>
       </header>
 
@@ -234,7 +258,7 @@ export function App(): ReactElement {
         </section>
       ) : null}
 
-      <FilterBar filters={filters} gameTypes={gameTypes} onChange={setFilters} />
+      {viewMode !== "showcase" ? <FilterBar filters={filters} gameTypes={gameTypes} onChange={setFilters} /> : null}
 
       {library.games.length === 0 ? (
         <section className="empty-state">
@@ -243,6 +267,21 @@ export function App(): ReactElement {
           <div className="actions">
             <button type="button" onClick={scanLibrary} disabled={loading}>Scan Library</button>
             <button type="button" onClick={addManualFolder} disabled={loading}>Add Folder</button>
+          </div>
+        </section>
+      ) : viewMode === "showcase" ? (
+        <section className="library" ref={libraryRef} aria-label="Game library">
+          <div className="game-grid" style={{ gridTemplateColumns: `repeat(${showcaseCols}, 1fr)`, gap: 8 }}>
+            {library.games.map((game, index) => (
+              <GameTile
+                game={game}
+                index={index}
+                key={game.gameId}
+                onEdit={() => setEditingGame(game)}
+                onLaunch={() => launchGame(game)}
+                onResolveDuplicate={() => setDuplicateGroup(library.duplicates.find((item) => item.gameId === game.gameId))}
+              />
+            ))}
           </div>
         </section>
       ) : (
@@ -406,6 +445,23 @@ function numberOrUndefined(value: string): number | undefined {
 function colourFor(seed: string): string {
   const colours = ["#3fbf9b", "#e8c547", "#ef6f6c", "#7bd389", "#f08a4b", "#5db7de"];
   return colours[[...seed].reduce((total, char) => total + char.charCodeAt(0), 0) % colours.length];
+}
+
+function calculateShowcaseLayout(count: number, width: number, height: number, gap: number): { cols: number; rows: number } {
+  if (count === 0 || width <= 0 || height <= 0) return { cols: 1, rows: 1 };
+  let bestCols = 1;
+  let bestTileWidth = 0;
+  for (let cols = 1; cols <= count; cols++) {
+    const tileWidth = (width - gap * (cols - 1)) / cols;
+    const tileHeight = tileWidth * 9 / 16;
+    const rows = Math.ceil(count / cols);
+    const totalHeight = tileHeight * rows + gap * (rows - 1);
+    if (totalHeight <= height && tileWidth > bestTileWidth) {
+      bestTileWidth = tileWidth;
+      bestCols = cols;
+    }
+  }
+  return { cols: bestCols, rows: Math.ceil(count / bestCols) };
 }
 
 function statusForLibrary(library: LibraryState): string {
