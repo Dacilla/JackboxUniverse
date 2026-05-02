@@ -34,11 +34,15 @@ npm run typecheck
 npm test
 npm run build
 npm run package:win
+npm run audit          # Playwright screenshot + missing-artwork report
+npm run audit:artwork  # HTML page showing all cached banners
 ```
 
 `npm run build` is the main verification command. It cleans generated output, type-checks, runs tests, builds the Electron main/preload files, and builds the renderer.
 
 `npm run package:win` builds the portable Windows executable in `release/`.
+
+The `audit` and `audit:artwork` commands use Playwright and local cache data to produce diagnostic reports suitable for sharing with vision-capable LLMs.
 
 ## Architecture
 
@@ -131,23 +135,39 @@ Do not use IGDB or other external APIs for text metadata. SteamGridDB is planned
 
 ## Launch Rules
 
-The MVP uses direct executable launches only.
+The MVP uses direct executable launches with a fallback chain.
 
-When a matching SWF exists at:
-
-```text
-games/<InternalName>/<InternalName>.swf
-```
-
-the launch arguments are:
+For packs that support direct launch (Packs 3–11, Naughty), the launch arguments are:
 
 ```text
--launchTo games%2F<InternalName>%2F<InternalName>.swf -jbg.config isBundle=false
+-launchTo games/<InternalName>/<InternalName>.swf -jbg.config isBundle=false
 ```
 
-If direct launch support cannot be confirmed, launch the parent pack executable with no mini-game arguments and label the UI action as `Launch Pack Menu`.
+Note: Slashes in the `-launchTo` path are literal forward slashes (`/`), NOT URI-encoded (`%2F`). Encoding causes ACCESS VIOLATION crashes.
+
+If the process exits within 1.5 seconds (unsupported args), the launcher tries a second time WITHOUT the `-jbg.config isBundle=false` flags (for packs that reject the `-jbg.config` argument). If that also fails, the pack menu is launched with no arguments as a final fallback.
+
+Use `stdio: "ignore"` when spawning — older Flash-based packs crash when stdio is piped.
 
 The app tracks the spawned PID. `Ctrl+Q` force-closes the tracked process tree using Windows `taskkill`.
+
+## Artwork Rules
+
+Banner artwork is downloaded from two sources in priority order:
+
+1. **Official JackboxGames.com** — scrapes `https://www.jackboxgames.com/games/<slug>` for CMS asset images. Only images whose filename contains the game's normalised name (or a known alias) are accepted. Wordmarks, logos, hero images, and wide images are rejected outright. Screenshots, trailers, and gameplay images are heavily penalised.
+
+2. **SteamGridDB** (requires API key) — searches for exact-name game matches (no fuzzy matching). Returns multiple grid candidates sorted by score, with foreign-language artwork filtered by URL pattern detection.
+
+Images are cached locally in `%APPDATA%/jackbox-universe/steamgriddb-banners/` served through a custom `jackbox-artwork://` protocol. The cache version integer controls invalidation — increment it when matching logic changes.
+
+Content-hash deduplication prevents the same image from being assigned to two different games (e.g. sibling tiles on a pack page).
+
+A "Clear Artwork Cache & Re-download" button in Settings wipes the cache and re-downloads everything.
+
+## Progress Reporting
+
+Artwork hydration sends progress via `webContents.send("library:hydration-progress", { current, total, displayName })`. The renderer subscribes through `window.jackboxUniverse.onProgress(callback)` which returns an unsubscribe function. The status strip shows a progress bar during downloads.
 
 ## UI Conventions
 
@@ -178,14 +198,20 @@ Add or update tests when changing:
 - metadata parsing
 - duplicate detection
 - launch argument generation
+- launch process lifecycle
+- artwork downloading, caching, and deduplication
 - IPC-facing data shapes
 - renderer workflows
 
-Current test areas:
+Current test areas (93 tests across 7 files):
 
-- `tests/metadata.test.ts`
-- `tests/scanner.test.ts`
-- `tests/App.test.tsx`
+- `tests/metadata.test.ts` — jbg.config parsing, JSON/XML metadata, overrides
+- `tests/scanner.test.ts` — pack discovery, shortcuts, picker metadata, launch args, duplicate groups
+- `tests/hash.test.ts` — stableHash and normaliseKey utilities
+- `tests/launcher.test.ts` — argument generation, executable validation, kill flow
+- `tests/launch-integration.test.ts` — real-process launch/kill/relaunch pipeline (reads pack paths from electron-store, skips if none configured)
+- `tests/artwork.test.ts` — SteamGridDB/official downloads, foreign-language rejection, name-match filtering, content-hash dedup, cache invalidation
+- `tests/App.test.tsx` — renderer rendering, artwork classes, filters, search, sort, dialogs, keyboard navigation
 
 Windows can briefly lock test fixture files. Use retrying cleanup for generated fixture directories.
 

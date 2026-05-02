@@ -131,7 +131,7 @@ describe("scanner", () => {
     expect(game.launchTarget).toBe("games/TriviaDeath/triviadeath.swf");
     expect(getLaunchArguments(game)).toEqual([
       "-launchTo",
-      "games%2FTriviaDeath%2Ftriviadeath.swf",
+      "games/TriviaDeath/triviadeath.swf",
       "-jbg.config",
       "isBundle=false"
     ]);
@@ -221,10 +221,97 @@ describe("scanner", () => {
     expect(library.games[0].needsDuplicateChoice).toBe(true);
     expect(getLaunchArguments(library.games[0].selected)).toEqual([
       "-launchTo",
-      "games%2FTriviaMurderParty%2FTriviaMurderParty.swf",
+      "games/TriviaMurderParty/TriviaMurderParty.swf",
       "-jbg.config",
       "isBundle=false"
     ]);
+  });
+
+  it("resolves duplicates when a preference is already stored", async () => {
+    const root = path.join(process.cwd(), "tmp-test-fixtures", `dupes-pref-${Date.now()}`);
+    fixtureRoots.push(root);
+    const first = await createPack(root, "Steam Copy", "TriviaMurderParty");
+    const second = await createPack(root, "DRM Free Copy", "TriviaMurderParty");
+
+    const lib = await buildLibrary([first, second], {}, {}, undefined);
+    const prefKey = lib.games[0].duplicateKey;
+    const prefInstall = lib.duplicates[0].installations[1].installationId;
+    const preferences: Record<string, string> = { [prefKey]: prefInstall };
+
+    const resolved = await buildLibrary([first, second], preferences, {}, undefined);
+
+    expect(resolved.games[0].needsDuplicateChoice).toBe(false);
+    expect(resolved.games[0].selectedInstallationId).toBe(prefInstall);
+    expect(resolved.games[0].selected.packName).toBe("DRM Free Copy");
+  });
+
+  it("returns empty state for empty or invalid pack paths", async () => {
+    const library = await buildLibrary([], {}, {}, undefined);
+    expect(library.games).toEqual([]);
+    expect(library.packs).toEqual([]);
+    expect(library.duplicates).toEqual([]);
+  });
+
+  it("generates direct launch arguments with special characters in game name", async () => {
+    const root = path.join(process.cwd(), "tmp-test-fixtures", `special-chars-${Date.now()}`);
+    fixtureRoots.push(root);
+    const packPath = await createPack(root, "The Jackbox Party Pack 7", "Champ'd Up");
+    await writeFile(path.join(packPath, "games", "Champ'd Up", "Champ'd Up.swf"), "");
+
+    const library = await buildLibrary([packPath], {}, {}, undefined);
+    const args = getLaunchArguments(library.games[0].selected);
+
+    expect(args[0]).toBe("-launchTo");
+    expect(args[1]).toContain("Champ");
+    expect(args[2]).toBe("-jbg.config");
+    expect(args[3]).toBe("isBundle=false");
+  });
+
+  it("returns empty launch arguments when directLaunchSupported is false", async () => {
+    const root = path.join(process.cwd(), "tmp-test-fixtures", `no-direct-${Date.now()}`);
+    fixtureRoots.push(root);
+    const packPath = await createPack(root, "The Jackbox Party Pack 3", "Guesspionage", false);
+
+    const library = await buildLibrary([packPath], {}, {}, undefined);
+
+    expect(library.games[0].selected.directLaunchSupported).toBe(false);
+    expect(library.games[0].selected.launchLabel).toBe("Launch Pack Menu");
+    expect(getLaunchArguments(library.games[0].selected)).toEqual([]);
+  });
+
+  it("sorts duplicate groups alphabetically by display name", async () => {
+    const root = path.join(process.cwd(), "tmp-test-fixtures", `dupe-sort-${Date.now()}`);
+    fixtureRoots.push(root);
+    const first = await createPack(root, "Copy A", "Zort");
+    const second = await createPack(root, "Copy B", "Zort");
+    const third = await createPack(root, "Copy C", "Aardvark");
+    const fourth = await createPack(root, "Copy D", "Aardvark");
+
+    const library = await buildLibrary([first, second, third, fourth], {}, {}, undefined);
+
+    expect(library.duplicates).toHaveLength(2);
+    expect(library.duplicates[0].displayName).toBe("Aardvark");
+    expect(library.duplicates[1].displayName).toBe("Zort");
+  });
+
+  it("validates pack paths by filtering out non-pack directories", async () => {
+    const root = path.join(process.cwd(), "tmp-test-fixtures", `validate-nonpack-${Date.now()}`);
+    fixtureRoots.push(root);
+    await mkdir(path.join(root, "NotAGame"), { recursive: true });
+
+    const validated = await validatePackPaths([path.join(root, "NotAGame")]);
+
+    expect(validated).toEqual([]);
+  });
+
+  it("normalises and deduplicates pack paths", async () => {
+    const root = path.join(process.cwd(), "tmp-test-fixtures", `dedup-${Date.now()}`);
+    fixtureRoots.push(root);
+    const packPath = await createPack(root, "The Jackbox Party Pack 5", "MadVerseCity");
+
+    const validated = await validatePackPaths([packPath, `${packPath}${path.sep}`, packPath]);
+
+    expect(validated).toEqual([packPath]);
   });
 });
 

@@ -13,30 +13,35 @@ Implemented now:
 - Windows Electron desktop app with a React renderer.
 - Local scan for installed Jackbox pack folders.
 - Manual folder picker for standalone or missed installations.
-- Manual scan support for folders containing local `.lnk` or file `.url` shortcuts to Jackbox pack executables.
-- Cache validation on launch, removing missing pack paths from local storage.
+- Shortcut support — `.lnk` and `.url` shortcuts to Jackbox executables are resolved.
+- Cache validation on launch — missing pack paths are cleaned up automatically.
 - Local metadata extraction from `jbg.config`, `manifest.json`, and XML files.
-- Picker metadata extraction from local `games/Picker` or `games/PartyPack` content and localisation files.
+- Picker metadata extraction from `games/Picker` or `games/PartyPack` content and localisation files.
 - Manual metadata overrides for display name, description, player counts, game type, and audience support.
 - Duplicate detection for matching games found in multiple install locations.
 - Duplicate-resolution UI for choosing the preferred installation.
 - Library grid grouped by Party Pack by default.
-- Search, player count, game type, audience, and alphabetical sorting controls.
-- CSS-generated fallback banners.
-- Direct executable launch with mini-game arguments where a matching SWF path is found.
-- Parent pack menu fallback where direct mini-game launch support cannot be confirmed.
-- Active process tracking, launcher minimising, restore on exit, and `Ctrl+Q` force-close support.
+- Search, player count, game type, audience, and alphabetical sort controls.
+- Banner artwork from JackboxGames.com (with name-matched tile detection) and SteamGridDB (when an API key is configured).
+- Foreign-language artwork rejection (Russian, German, French, etc. via URL pattern matching).
+- Content-hash deduplication — different games can never receive the same image.
+- Artwork download progress bar in the status strip.
+- "Clear Artwork Cache & Re-download" button in Settings.
+- Friendly pack names — dots in folder names like `The.Jackbox.Party.Pack.10` are replaced with spaces.
+- Direct game launch with multi-stage fallback: `-launchTo` with `isBundle=false` → `-launchTo` alone → pack menu.
+- Active process tracking, launcher minimising, restore on exit, and `Ctrl+Q` force-close.
+- Custom app icon (Jackbox logo).
 - Portable Windows build through `electron-builder`.
+- Playwright-based audit tools (`npm run audit`, `npm run audit:artwork`).
+- 93 automated tests across 7 test files including real-process launch/kill integration tests.
 
 Not implemented yet:
 
-- SteamGridDB banner downloading.
 - Audio cues.
 - Gamepad navigation.
 - System tray integration.
-- Per-pack launch compatibility tables beyond the current direct SWF-path check.
 - Installer builds.
-- Code signing or a custom app icon.
+- Code signing (the portable build uses `signAndEditExecutable: false`).
 
 ## How It Works
 
@@ -49,13 +54,13 @@ Manual scan folders can also contain shortcuts. Windows `.lnk` shortcuts are res
 
 For each game folder inside `games`, the app first checks the pack picker metadata in `games/Picker/content.json` or `games/PartyPack/content.json`, resolving localised game names and descriptions through adjacent `Localization.json` files where available. This is the best local source for display names, player counts, picker tags, audience support, and the exact SWF target used by the pack itself. If picker metadata is missing, the app falls back to per-game config files.
 
-If a direct SWF target can be confirmed, the launcher attempts direct launch using:
+If a direct SWF target can be confirmed, the launcher attempts direct launch using literal forward slashes:
 
 ```text
--launchTo games%2F<InternalName>%2F<InternalName>.swf -jbg.config isBundle=false
+-launchTo games/<InternalName>/<InternalName>.swf -jbg.config isBundle=false
 ```
 
-If that direct launch pattern is not supported for a discovered game, the UI labels the action as `Launch Pack Menu` and launches the parent pack executable normally.
+If the game exits quickly (within 1.5 seconds), the launcher retries without `-jbg.config isBundle=false` (some packs reject that flag). If that also fails, it falls back to launching the pack menu with no arguments.
 
 ## Requirements
 
@@ -119,7 +124,7 @@ npm run package:win
 The portable executable is written to:
 
 ```text
-release/Jackbox-Universe-0.1.0.exe
+release/Jackbox-Universe-0.2.0.exe
 ```
 
 The unpacked app is written to:
@@ -140,7 +145,8 @@ The current portable build is unsigned and uses Electron's default icon.
 6. Select `Launch Game` where direct launch is supported.
 7. Select `Launch Pack Menu` where the MVP cannot confirm direct mini-game launch support.
 8. Right-click a game tile, or select `Customise`, to edit local metadata overrides.
-9. Use `Ctrl+Q` to force-close the tracked active game process and return focus to the launcher.
+9. Add a SteamGridDB API key in `Settings` to download cached grid banners for discovered games.
+10. Use `Ctrl+Q` to force-close the tracked active game process and return focus to the launcher.
 
 ## Local Data
 
@@ -150,9 +156,10 @@ Jackbox Universe stores local app state with `electron-store`, including:
 - manually added scan roots
 - duplicate choices
 - metadata overrides
+- downloaded artwork cache entries
 - settings
 
-No external metadata service is used for game text in the MVP. The SteamGridDB API key setting is reserved for the planned banner download feature.
+No external metadata service is used for game text in the MVP. SteamGridDB is only queried for image assets, using locally extracted display names.
 
 ## Project Structure
 
@@ -172,19 +179,19 @@ release/              Generated packaged app output
 ```text
 npm run dev           Run Vite and Electron for development
 npm run typecheck     Type-check the project
-npm test              Run Vitest once
+npm test              Run Vitest once (93 tests, 7 files)
 npm run test:watch    Run Vitest in watch mode
 npm run build         Run the full validation and build pipeline
 npm run package:win   Build the portable Windows executable
 npm run clean         Remove dist and release outputs
+npm run audit         Playwright screenshot + missing-artwork report
+npm run audit:artwork HTML page showing all cached banners
 ```
 
 ## Roadmap
 
 Planned next work:
 
-- Add SteamGridDB integration for downloaded 16:9 banners.
-- Cache downloaded banners in app data.
 - Add a custom app icon and package metadata polish.
 - Add audio cues with a setting to disable them.
 - Add HTML5 Gamepad API navigation.
@@ -195,12 +202,13 @@ Planned next work:
 
 ## Known Limitations
 
-- Direct mini-game launch is best-effort in the MVP.
-- Some Jackbox packs may require loader-style behaviour that this project intentionally does not implement yet.
+- Direct mini-game launch uses a best-effort fallback chain: some very old packs (Pack 1, Pack 2) may only open the pack menu.
+- Some Jackbox packs may require loader-style behaviour that this project intentionally does not implement.
 - The scanner only recognises pack folders with a `Jackbox` executable and adjacent `games` folder.
 - Metadata quality depends on the installed local files; older packs without readable picker metadata may need manual overrides.
 - The current package is unsigned, so Windows may show SmartScreen or trust prompts.
 - Game process kill uses Windows `taskkill` against the tracked PID tree.
+- Artwork downloads depend on the availability of JackboxGames.com and SteamGridDB; some games may show CSS-generated fallback banners.
 
 ## Development Notes
 

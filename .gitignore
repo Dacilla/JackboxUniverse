@@ -39,3 +39,11 @@ Desktop.ini
 
 # Runtime/local app data
 *.local
+
+# Diagnostic scripts (machine-specific)
+scripts/test-*.mjs
+scripts/diagnose-*.mjs
+artwork-audit.html
+artwork-screenshot.png
+tmp-audit/
+tmp-audit-*/

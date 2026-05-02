@@ -16,6 +16,23 @@ export interface Settings {
   preferReducedMotion: boolean;
 }
 
+export type BannerSource = "jackbox" | "steamgriddb";
+
+export type ArtworkCacheStatus = "available" | "missing" | "error";
+
+export interface ArtworkCacheEntry {
+  status: ArtworkCacheStatus;
+  displayName: string;
+  updatedAt: string;
+  cacheVersion?: number;
+  localPath?: string;
+  sourceUrl?: string;
+  source?: BannerSource;
+  steamGridDbGameId?: number;
+  steamGridDbGridId?: number;
+  errorMessage?: string;
+}
+
 export interface PackInstallation {
   packId: string;
   packName: string;
@@ -44,6 +61,8 @@ export interface GameInstallation {
   launchTarget?: string;
   directLaunchSupported: boolean;
   launchLabel: "Launch Game" | "Launch Pack Menu";
+  bannerUrl?: string;
+  bannerSource?: BannerSource;
 }
 
 export interface LibraryGame {
@@ -82,6 +101,7 @@ export interface StoredState {
   manualRoots: string[];
   duplicatePreferences: Record<string, string>;
   metadataOverrides: Record<string, MetadataOverride>;
+  artworkCache: Record<string, ArtworkCacheEntry>;
   settings: Settings;
   lastScanAt?: string;
 }
@@ -96,4 +116,12 @@ export interface JackboxUniverseApi {
   killActiveGame(): Promise<LaunchResult>;
   getSettings(): Promise<Settings>;
   saveSettings(settings: Settings): Promise<Settings>;
+  onProgress(callback: (progress: HydrationProgress) => void): () => void;
+  clearArtworkCache(): Promise<LibraryState>;
+}
+
+export interface HydrationProgress {
+  current: number;
+  total: number;
+  displayName: string;
 }

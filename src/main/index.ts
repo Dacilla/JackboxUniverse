@@ -1,9 +1,24 @@
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain } from "electron";
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, net, protocol } from "electron";
 import type { BrowserWindow as ElectronBrowserWindow } from "electron";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import type { LibraryState, MetadataOverride, ScanOptions, Settings } from "../shared/types.js";
 import { buildLibrary, discoverPackRoots, getDefaultScanRoots, validatePackPaths } from "./scanner.js";
 import { killActiveGame, launchInstallation } from "./launcher.js";
+import { hydrateLibraryArtwork } from "./artwork.js";
+
+const artworkProtocolScheme = "jackbox-artwork";
+
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: artworkProtocolScheme,
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true
+    }
+  }
+]);
 
 let mainWindow: ElectronBrowserWindow | undefined;
 let storeApi: typeof import("./store.js") | undefined;
@@ -17,6 +32,7 @@ async function createWindow(): Promise<void> {
     minWidth: 960,
     minHeight: 640,
     title: "Jackbox Universe",
+    icon: path.join(__dirname, "../../resources/icon.ico"),
     backgroundColor: "#111111",
     webPreferences: {
       preload: path.join(__dirname, "../preload/index.js"),
@@ -35,6 +51,7 @@ async function createWindow(): Promise<void> {
 
 app.whenReady().then(async () => {
   storeApi = require("./store.js") as typeof import("./store.js");
+  registerArtworkProtocol();
   registerIpc();
   await createWindow();
   globalShortcut.register("CommandOrControl+Q", () => {
@@ -79,6 +96,10 @@ function registerIpc(): void {
   ipcMain.handle("game:killActive", () => killActiveGame());
   ipcMain.handle("settings:get", () => store().getSettings());
   ipcMain.handle("settings:save", (_event, settings: Settings) => store().setSettings(settings));
+  ipcMain.handle("library:clearArtworkCache", async () => {
+    store().setArtworkCache({});
+    return loadLibrary();
+  });
 }
 
 async function scanLibrary(options?: ScanOptions): Promise<LibraryState> {
@@ -93,7 +114,7 @@ async function scanLibrary(options?: ScanOptions): Promise<LibraryState> {
 
   store().setPackPaths(validPackPaths);
   store().setLastScanAt(lastScanAt);
-  return buildLibrary(validPackPaths, store().getDuplicatePreferences(), store().getMetadataOverrides(), lastScanAt);
+  return buildAndHydrateLibrary(validPackPaths, lastScanAt);
 }
 
 async function addManualFolder(manualPath?: string): Promise<LibraryState> {
@@ -119,7 +140,45 @@ async function addManualFolder(manualPath?: string): Promise<LibraryState> {
 async function loadLibrary(): Promise<LibraryState> {
   const validPackPaths = await validatePackPaths(store().getPackPaths());
   store().setPackPaths(validPackPaths);
-  return buildLibrary(validPackPaths, store().getDuplicatePreferences(), store().getMetadataOverrides(), store().getLastScanAt());
+  return buildAndHydrateLibrary(validPackPaths, store().getLastScanAt());
+}
+
+async function buildAndHydrateLibrary(packPaths: string[], lastScanAt?: string): Promise<LibraryState> {
+  const library = await buildLibrary(packPaths, store().getDuplicatePreferences(), store().getMetadataOverrides(), lastScanAt);
+  const result = await hydrateLibraryArtwork({
+    library,
+    apiKey: store().getSettings().steamGridDbApiKey,
+    cache: store().getArtworkCache(),
+    cacheDir: getArtworkCacheDir(),
+    assetUrlForPath: artworkUrlForPath,
+    onProgress: (current, total, displayName) => {
+      mainWindow?.webContents.send("library:hydration-progress", { current, total, displayName });
+    }
+  });
+  store().setArtworkCache(result.cache);
+  return result.library;
+}
+
+function registerArtworkProtocol(): void {
+  protocol.handle(artworkProtocolScheme, (request) => {
+    const fileName = path.basename(decodeURIComponent(new URL(request.url).pathname));
+    const resolvedPath = path.resolve(getArtworkCacheDir(), fileName);
+    const resolvedCacheDir = path.resolve(getArtworkCacheDir());
+
+    if (!resolvedPath.startsWith(`${resolvedCacheDir}${path.sep}`)) {
+      return new Response("Artwork not found.", { status: 404 });
+    }
+
+    return net.fetch(pathToFileURL(resolvedPath).href);
+  });
+}
+
+function getArtworkCacheDir(): string {
+  return path.join(app.getPath("userData"), "steamgriddb-banners");
+}
+
+function artworkUrlForPath(localPath: string): string {
+  return `${artworkProtocolScheme}://banners/${encodeURIComponent(path.basename(localPath))}`;
 }
 
 function store(): typeof import("./store.js") {

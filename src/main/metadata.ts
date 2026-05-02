@@ -43,7 +43,7 @@ export function applyMetadataOverride(metadata: ExtractedMetadata, override?: Me
   if (!override) return metadata;
   return {
     displayName: override.displayName?.trim() || metadata.displayName,
-    description: override.description?.trim() ?? metadata.description,
+    description: override.description?.trim() || metadata.description,
     minPlayers: override.minPlayers ?? metadata.minPlayers,
     maxPlayers: override.maxPlayers ?? metadata.maxPlayers,
     gameType: override.gameType?.trim() || metadata.gameType,

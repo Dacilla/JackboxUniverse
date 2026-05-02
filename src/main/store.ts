@@ -1,5 +1,5 @@
 import Store from "electron-store";
-import type { MetadataOverride, Settings, StoredState } from "../shared/types.js";
+import type { ArtworkCacheEntry, MetadataOverride, Settings, StoredState } from "../shared/types.js";
 
 const defaultSettings: Settings = {
   steamGridDbApiKey: "",
@@ -13,6 +13,7 @@ const store = new Store<StoredState>({
     manualRoots: [],
     duplicatePreferences: {},
     metadataOverrides: {},
+    artworkCache: {},
     settings: defaultSettings,
     lastScanAt: undefined
   }
@@ -48,6 +49,14 @@ export function getMetadataOverrides(): Record<string, MetadataOverride> {
 
 export function setMetadataOverride(gameId: string, override: MetadataOverride): void {
   store.set("metadataOverrides", { ...getMetadataOverrides(), [gameId]: stripEmptyOverride(override) });
+}
+
+export function getArtworkCache(): Record<string, ArtworkCacheEntry> {
+  return store.get("artworkCache", {});
+}
+
+export function setArtworkCache(cache: Record<string, ArtworkCacheEntry>): void {
+  store.set("artworkCache", cache);
 }
 
 export function getSettings(): Settings {

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CSSProperties, ReactElement } from "react";
-import type { DuplicateGroup, LibraryGame, LibraryState, MetadataOverride, Settings } from "../shared/types";
+import type { DuplicateGroup, HydrationProgress, LibraryGame, LibraryState, MetadataOverride, Settings } from "../shared/types";
 
 const emptyLibrary: LibraryState = { packs: [], games: [], duplicates: [] };
 
@@ -28,16 +28,25 @@ export function App(): ReactElement {
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("Loading library.");
+  const [hydrationProgress, setHydrationProgress] = useState<HydrationProgress | undefined>();
   const [editingGame, setEditingGame] = useState<LibraryGame | undefined>();
   const [showSettings, setShowSettings] = useState(false);
   const [duplicateGroup, setDuplicateGroup] = useState<DuplicateGroup | undefined>();
 
   const loadLibrary = useCallback(async () => {
     setLoading(true);
+    setStatus("Loading library.");
+    setHydrationProgress(undefined);
+    const unsub = window.jackboxUniverse.onProgress((progress) => {
+      setHydrationProgress(progress);
+      setStatus(`Downloading artwork. ${progress.current} of ${progress.total}`);
+    });
     const [nextLibrary, nextSettings] = await Promise.all([
       window.jackboxUniverse.getLibrary(),
       window.jackboxUniverse.getSettings()
     ]);
+    unsub();
+    setHydrationProgress(undefined);
     setLibrary(nextLibrary);
     setSettings(nextSettings);
     setStatus(statusForLibrary(nextLibrary));
@@ -55,6 +64,7 @@ export function App(): ReactElement {
         setDuplicateGroup(undefined);
         setShowSettings(false);
       }
+      if (event.target instanceof HTMLElement && (event.target.tagName === "INPUT" || event.target.tagName === "TEXTAREA" || event.target.tagName === "SELECT" || event.target.isContentEditable)) return;
       if (event.key === "ArrowRight" || event.key === "ArrowDown") moveFocus(1);
       if (event.key === "ArrowLeft" || event.key === "ArrowUp") moveFocus(-1);
     }
@@ -114,7 +124,11 @@ export function App(): ReactElement {
   async function scanLibrary(): Promise<void> {
     setLoading(true);
     setStatus("Scanning common install folders.");
+    setHydrationProgress(undefined);
+    const unsub = window.jackboxUniverse.onProgress((progress) => setHydrationProgress(progress));
     const next = await window.jackboxUniverse.scanLibrary();
+    unsub();
+    setHydrationProgress(undefined);
     setLibrary(next);
     setStatus(statusForLibrary(next));
     setLoading(false);
@@ -122,7 +136,11 @@ export function App(): ReactElement {
 
   async function addManualFolder(): Promise<void> {
     setLoading(true);
+    setHydrationProgress(undefined);
+    const unsub = window.jackboxUniverse.onProgress((progress) => setHydrationProgress(progress));
     const next = await window.jackboxUniverse.addManualFolder();
+    unsub();
+    setHydrationProgress(undefined);
     setLibrary(next);
     setStatus(statusForLibrary(next));
     setLoading(false);
@@ -154,14 +172,35 @@ export function App(): ReactElement {
   }
 
   async function saveSettings(nextSettings: Settings): Promise<void> {
+    setLoading(true);
+    setShowSettings(false);
+    setHydrationProgress(undefined);
     const saved = await window.jackboxUniverse.saveSettings(nextSettings);
     setSettings(saved);
+    const unsub = window.jackboxUniverse.onProgress((progress) => setHydrationProgress(progress));
+    const nextLibrary = await window.jackboxUniverse.getLibrary();
+    unsub();
+    setHydrationProgress(undefined);
+    setLibrary(nextLibrary);
+    setStatus("Settings saved. Library artwork refreshed.");
+    setLoading(false);
+  }
+
+  async function clearArtworkCache(): Promise<void> {
+    setLoading(true);
     setShowSettings(false);
-    setStatus("Settings saved.");
+    setHydrationProgress(undefined);
+    const unsub = window.jackboxUniverse.onProgress((progress) => setHydrationProgress(progress));
+    const nextLibrary = await window.jackboxUniverse.clearArtworkCache();
+    unsub();
+    setHydrationProgress(undefined);
+    setLibrary(nextLibrary);
+    setStatus("Artwork cache cleared. Re-downloading all banners.");
+    setLoading(false);
   }
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell${settings.preferReducedMotion ? " reduce-motion" : ""}`}>
       <header className="topbar">
         <div>
           <p className="eyebrow">Windows launcher</p>
@@ -176,7 +215,10 @@ export function App(): ReactElement {
       </header>
 
       <section className="status-strip" aria-live="polite">
-        <span>{loading ? "Working..." : status}</span>
+        <span>{hydrationProgress ? `Downloading artwork. ${hydrationProgress.current} of ${hydrationProgress.total}` : loading ? "Working..." : status}</span>
+        {hydrationProgress ? (
+          <progress className="hydration-progress" value={hydrationProgress.current} max={hydrationProgress.total} aria-label="Artwork download progress" />
+        ) : null}
         <span>{library.games.length} games</span>
         <span>{library.packs.length} packs</span>
         <span>{library.duplicates.length} duplicate groups</span>
@@ -227,7 +269,7 @@ export function App(): ReactElement {
 
       {editingGame ? <MetadataDialog game={editingGame} onCancel={() => setEditingGame(undefined)} onSave={saveMetadata} /> : null}
       {duplicateGroup ? <DuplicateDialog group={duplicateGroup} onCancel={() => setDuplicateGroup(undefined)} onChoose={chooseDuplicate} /> : null}
-      {showSettings ? <SettingsDialog settings={settings} onCancel={() => setShowSettings(false)} onSave={saveSettings} /> : null}
+      {showSettings ? <SettingsDialog settings={settings} onCancel={() => setShowSettings(false)} onSave={saveSettings} onClearArtworkCache={clearArtworkCache} /> : null}
     </main>
   );
 }
@@ -249,7 +291,8 @@ function GameTile({ game, index, onEdit, onLaunch, onResolveDuplicate }: { game:
   const playerText = selected.minPlayers && selected.maxPlayers ? `${selected.minPlayers}-${selected.maxPlayers} players` : "Players unknown";
   return (
     <article className="game-tile" onContextMenu={(event) => { event.preventDefault(); onEdit(); }}>
-      <button type="button" className="banner" data-game-index={index} onClick={onLaunch} style={{ "--banner-accent": colourFor(selected.displayName) } as CSSProperties}>
+      <button type="button" className={`banner ${selected.bannerUrl ? "has-artwork" : ""}`} data-game-index={index} onClick={onLaunch} style={{ "--banner-accent": colourFor(selected.displayName) } as CSSProperties}>
+        {selected.bannerUrl ? <img src={selected.bannerUrl} alt="" aria-hidden="true" loading="lazy" /> : null}
         <span>{selected.displayName}</span>
       </button>
       <div className="game-copy">
@@ -328,18 +371,20 @@ function DuplicateDialog({ group, onCancel, onChoose }: { group: DuplicateGroup;
   );
 }
 
-function SettingsDialog({ settings, onCancel, onSave }: { settings: Settings; onCancel(): void; onSave(settings: Settings): void }): ReactElement {
+function SettingsDialog({ settings, onCancel, onSave, onClearArtworkCache }: { settings: Settings; onCancel(): void; onSave(settings: Settings): void; onClearArtworkCache(): void }): ReactElement {
   const [form, setForm] = useState(settings);
   return (
     <div className="dialog-backdrop" role="presentation">
       <section className="dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
         <h2 id="settings-title">Settings</h2>
-        <label>SteamGridDB API key<input type="password" value={form.steamGridDbApiKey ?? ""} onChange={(event) => setForm({ ...form, steamGridDbApiKey: event.target.value })} placeholder="Saved for Phase 2 banner downloads" /></label>
+        <label>SteamGridDB API key<input type="password" value={form.steamGridDbApiKey ?? ""} onChange={(event) => setForm({ ...form, steamGridDbApiKey: event.target.value })} placeholder="Downloads grid banners into local cache" /></label>
         <label className="checkbox-row"><input type="checkbox" checked={form.preferReducedMotion} onChange={(event) => setForm({ ...form, preferReducedMotion: event.target.checked })} />Reduce motion</label>
         <div className="dialog-actions">
           <button type="button" onClick={onCancel}>Cancel</button>
           <button type="button" onClick={() => onSave(form)}>Save</button>
         </div>
+        <hr />
+        <button type="button" className="danger-button" onClick={onClearArtworkCache}>Clear Artwork Cache &amp; Re-download</button>
       </section>
     </div>
   );

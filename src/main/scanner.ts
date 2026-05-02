@@ -89,8 +89,7 @@ export async function buildLibrary(
 export function getLaunchArguments(installation: GameInstallation): string[] {
   if (!installation.directLaunchSupported) return [];
   const target = installation.launchTarget ?? `games/${installation.internalName}/${installation.internalName}.swf`;
-  const encodedTarget = encodeURIComponent(target.replaceAll("\\", "/"));
-  return ["-launchTo", encodedTarget, "-jbg.config", "isBundle=false"];
+  return ["-launchTo", target.replaceAll("\\", "/"), "-jbg.config", "isBundle=false"];
 }
 
 async function discoverFromRoot(root: string, maxDepth: number): Promise<string[]> {
@@ -266,7 +265,7 @@ async function readPackInstallation(packPath: string): Promise<PackInstallation 
 
   return {
     packId: `pack-${stableHash(packPath.toLowerCase())}`,
-    packName: path.basename(packPath),
+    packName: path.basename(packPath).replace(/\./g, " ").replace(/\s+/g, " ").trim(),
     packPath,
     executablePath: path.join(packPath, executable.name),
     gamesPath: path.join(packPath, "games")
