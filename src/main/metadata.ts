@@ -164,14 +164,17 @@ function readNumber(values: Record<string, unknown>, keys: string[]): number | u
   return undefined;
 }
 
+const truthyBooleans = new Set(["true", "yes", "1", "supported"]);
+const falseyBooleans = new Set(["false", "no", "0", "unsupported"]);
+
 function readBoolean(values: Record<string, unknown>, keys: string[]): boolean | undefined {
   for (const key of keys) {
     const value = findValue(values, key);
     if (typeof value === "boolean") return value;
     if (typeof value === "string") {
       const normalised = value.toLowerCase().trim();
-      if (["true", "yes", "1", "supported"].includes(normalised)) return true;
-      if (["false", "no", "0", "unsupported"].includes(normalised)) return false;
+      if (truthyBooleans.has(normalised)) return true;
+      if (falseyBooleans.has(normalised)) return false;
     }
   }
   return undefined;

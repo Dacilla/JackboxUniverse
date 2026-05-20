@@ -97,9 +97,10 @@ export async function hydrateLibraryArtwork({
     const batch = pending.slice(i, i + batchSize);
     await Promise.all(
       batch.map(async (game) => {
+        const { displayName } = game.selected;
         try {
           const downloaded = await downloadBanner({
-            displayName: game.selected.displayName,
+            displayName,
             duplicateKey: game.duplicateKey,
             apiKey: token,
             cacheDir,
@@ -111,21 +112,21 @@ export async function hydrateLibraryArtwork({
           nextCache[game.duplicateKey] =
             downloaded?.cacheEntry ?? {
               status: "missing",
-              displayName: game.selected.displayName,
+              displayName,
               updatedAt: now.toISOString(),
               cacheVersion: artworkCacheVersion
             };
         } catch (error) {
           nextCache[game.duplicateKey] = {
             status: "error",
-            displayName: game.selected.displayName,
+            displayName,
             updatedAt: now.toISOString(),
             cacheVersion: artworkCacheVersion,
             errorMessage: error instanceof Error ? error.message : "SteamGridDB request failed."
           };
         } finally {
           completed++;
-          onProgress?.(completed, pending.length, game.selected.displayName);
+          onProgress?.(completed, pending.length, displayName);
         }
       })
     );

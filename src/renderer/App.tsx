@@ -25,6 +25,7 @@ const defaultFilters: Filters = {
 
 export function App(): ReactElement {
   const [library, setLibrary] = useState<LibraryState>(emptyLibrary);
+  const [settingsFormKey, setSettingsFormKey] = useState(0);
   const [settings, setSettings] = useState<Settings>({ steamGridDbApiKey: "", preferReducedMotion: false });
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [loading, setLoading] = useState(true);
@@ -96,7 +97,7 @@ export function App(): ReactElement {
     for (const game of library.games) {
       if (game.selected.gameType) types.add(game.selected.gameType);
     }
-    return [...types].sort((a, b) => a.localeCompare(b));
+    return [...types].toSorted((a, b) => a.localeCompare(b));
   }, [library.games]);
 
   const filteredGames = useMemo(() => {
@@ -229,7 +230,7 @@ export function App(): ReactElement {
           <button type="button" onClick={scanLibrary} disabled={loading}>Scan Library</button>
           <button type="button" onClick={addManualFolder} disabled={loading}>Add Folder</button>
           <button type="button" onClick={killActiveGame}>Close Active Game</button>
-          <button type="button" onClick={() => setShowSettings(true)}>Settings</button>
+          <button type="button" onClick={() => { setShowSettings(true); setSettingsFormKey((k) => k + 1); }}>Settings</button>
           <div className="view-modes" role="radiogroup" aria-label="Library view mode">
             <button type="button" role="radio" aria-checked={viewMode === "grid"} className={viewMode === "grid" ? "active" : ""} onClick={() => setViewMode("grid")}>Grid</button>
             <button type="button" role="radio" aria-checked={viewMode === "gallery"} className={viewMode === "gallery" ? "active" : ""} onClick={() => setViewMode("gallery")}>Gallery</button>
@@ -308,7 +309,7 @@ export function App(): ReactElement {
 
       {editingGame ? <MetadataDialog game={editingGame} onCancel={() => setEditingGame(undefined)} onSave={saveMetadata} /> : null}
       {duplicateGroup ? <DuplicateDialog group={duplicateGroup} onCancel={() => setDuplicateGroup(undefined)} onChoose={chooseDuplicate} /> : null}
-      {showSettings ? <SettingsDialog settings={settings} onCancel={() => setShowSettings(false)} onSave={saveSettings} onClearArtworkCache={clearArtworkCache} /> : null}
+      {showSettings ? <SettingsDialog key={settingsFormKey} settings={settings} onCancel={() => setShowSettings(false)} onSave={saveSettings} onClearArtworkCache={clearArtworkCache} /> : null}
     </main>
   );
 }
@@ -369,14 +370,14 @@ function MetadataDialog({ game, onCancel, onSave }: { game: LibraryGame; onCance
     <div className="dialog-backdrop" role="presentation">
       <section className="dialog" role="dialog" aria-modal="true" aria-labelledby="metadata-title">
         <h2 id="metadata-title">Customise Metadata</h2>
-        <label>Display name<input value={form.displayName ?? ""} onChange={(event) => setForm({ ...form, displayName: event.target.value })} /></label>
-        <label>Description<textarea value={form.description ?? ""} onChange={(event) => setForm({ ...form, description: event.target.value })} /></label>
+        <label>Display name<input value={form.displayName ?? ""} onChange={(event) => setForm((prev) => ({ ...prev, displayName: event.target.value }))} /></label>
+        <label>Description<textarea value={form.description ?? ""} onChange={(event) => setForm((prev) => ({ ...prev, description: event.target.value }))} /></label>
         <div className="split-fields">
-          <label>Min players<input type="number" value={form.minPlayers ?? ""} onChange={(event) => setForm({ ...form, minPlayers: numberOrUndefined(event.target.value) })} /></label>
-          <label>Max players<input type="number" value={form.maxPlayers ?? ""} onChange={(event) => setForm({ ...form, maxPlayers: numberOrUndefined(event.target.value) })} /></label>
+          <label>Min players<input type="number" value={form.minPlayers ?? ""} onChange={(event) => setForm((prev) => ({ ...prev, minPlayers: numberOrUndefined(event.target.value) }))} /></label>
+          <label>Max players<input type="number" value={form.maxPlayers ?? ""} onChange={(event) => setForm((prev) => ({ ...prev, maxPlayers: numberOrUndefined(event.target.value) }))} /></label>
         </div>
-        <label>Game type<input value={form.gameType ?? ""} onChange={(event) => setForm({ ...form, gameType: event.target.value })} /></label>
-        <label className="checkbox-row"><input type="checkbox" checked={form.audienceSupported ?? false} onChange={(event) => setForm({ ...form, audienceSupported: event.target.checked })} />Audience supported</label>
+        <label>Game type<input value={form.gameType ?? ""} onChange={(event) => setForm((prev) => ({ ...prev, gameType: event.target.value }))} /></label>
+        <label className="checkbox-row"><input type="checkbox" checked={form.audienceSupported ?? false} onChange={(event) => setForm((prev) => ({ ...prev, audienceSupported: event.target.checked }))} />Audience supported</label>
         <div className="dialog-actions">
           <button type="button" onClick={onCancel}>Cancel</button>
           <button type="button" onClick={() => onSave(game.gameId, form)}>Save</button>
@@ -416,8 +417,8 @@ function SettingsDialog({ settings, onCancel, onSave, onClearArtworkCache }: { s
     <div className="dialog-backdrop" role="presentation">
       <section className="dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
         <h2 id="settings-title">Settings</h2>
-        <label>SteamGridDB API key<input type="password" value={form.steamGridDbApiKey ?? ""} onChange={(event) => setForm({ ...form, steamGridDbApiKey: event.target.value })} placeholder="Downloads grid banners into local cache" /></label>
-        <label className="checkbox-row"><input type="checkbox" checked={form.preferReducedMotion} onChange={(event) => setForm({ ...form, preferReducedMotion: event.target.checked })} />Reduce motion</label>
+        <label>SteamGridDB API key<input type="password" value={form.steamGridDbApiKey ?? ""} onChange={(event) => setForm((prev) => ({ ...prev, steamGridDbApiKey: event.target.value }))} placeholder="Downloads grid banners into local cache" /></label>
+        <label className="checkbox-row"><input type="checkbox" checked={form.preferReducedMotion} onChange={(event) => setForm((prev) => ({ ...prev, preferReducedMotion: event.target.checked }))} />Reduce motion</label>
         <div className="dialog-actions">
           <button type="button" onClick={onCancel}>Cancel</button>
           <button type="button" onClick={() => onSave(form)}>Save</button>
